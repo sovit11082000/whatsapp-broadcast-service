@@ -103,12 +103,22 @@ async function initWhatsApp() {
       }
 
       if (connection === "open") {
-        isReady = true;
-        isConnecting = false;
-        reconnectAttempts = 0;
-        latestQr = null;
-        console.log("✅ WhatsApp successfully connected and saved in MongoDB!");
+      isReady = true;
+      isConnecting = false;
+      reconnectAttempts = 0;
+      latestQr = null;
+      console.log("✅ WhatsApp successfully connected and saved in MongoDB!");
+
+      // Channel session ko "warm up" karo taaki send karte waqt fresh crypto handshake na lage
+      try {
+        if (process.env.WHATSAPP_CHANNEL_ID) {
+          await sock.newsletterMetadata("jid", process.env.WHATSAPP_CHANNEL_ID);
+          console.log("🔥 Channel session warmed up");
+        }
+      } catch (e) {
+        console.log("Warm-up skipped:", e.message);
       }
+    }
 
       if (connection === "close") {
         isReady = false;
