@@ -15,6 +15,10 @@ function requireApiKey(req, res, next) {
 
 // 🌐 NAYA ROUTE: QR Code ko URL par dekhne ke liye
 app.get('/qr', async (req, res) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+
   const qr = getLatestQr();
   
   if (isWhatsAppReady()) {
@@ -26,7 +30,6 @@ app.get('/qr', async (req, res) => {
   }
 
   try {
-    // QR string ko Image (Data URL) me convert karke page par dikhana
     const qrImage = await QRCode.toDataURL(qr);
     res.send(`
       <div style="text-align: center; margin-top: 50px; font-family: Arial;">
