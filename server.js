@@ -48,7 +48,7 @@ app.get('/health', (req, res) => {
 });
 
 app.post('/api/send', requireApiKey, async (req, res) => {
-  const { channelId, text, imageUrl } = req.body;
+  const { channelId, text } = req.body;
 
   if (!channelId || !text) {
     return res.status(400).json({ error: 'channelId and text are required' });
@@ -62,11 +62,7 @@ app.post('/api/send', requireApiKey, async (req, res) => {
 
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      if (imageUrl) {
-        await sock.sendMessage(channelId, { image: { url: imageUrl }, caption: text });
-      } else {
-        await sock.sendMessage(channelId, { text });
-      }
+      await sock.sendMessage(channelId, { text });
       return res.json({ success: true, attempt });
     } catch (err) {
       lastError = err;
