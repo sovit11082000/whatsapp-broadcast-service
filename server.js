@@ -57,18 +57,28 @@ app.post('/api/send', requireApiKey, async (req, res) => {
     return res.status(503).json({ error: 'WhatsApp not connected yet' });
   }
 
-  try {
-    const sock = getSock();
-    if (imageUrl) {
-      await sock.sendMessage(channelId, { image: { url: imageUrl }, caption: text });
-    } else {
-      await sock.sendMessage(channelId, { text });
+  const sock = getSock();
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      if (imageUrl) {
+        await sock.sendMessage(channelId, { image: { url: imageUrl }, caption: text });
+      } else {
+        await sock.sendMessage(channelId, { text });
+      }
+      return res.json({ success: true, attempt });
+    } catch (err) {
+      lastError = err;
+      console.error(`Send attempt ${attempt} failed:`, err.message);
+      if (attempt < 3) {
+        await new Promise((r) => setTimeout(r, 2000 * attempt));
+      }
     }
-    res.json({ success: true });
-  } catch (err) {
-    console.error('Send failed:', err.message);
-    res.status(502).json({ error: 'Failed to send message' });
   }
+
+  console.error('All send attempts failed:', lastError?.message);
+  res.status(502).json({ error: 'Failed to send message after 3 attempts' });
 });
 
 app.listen(process.env.PORT || 4600, () => {
