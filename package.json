@@ -2,10 +2,15 @@
   "name": "whatsapp-broadcast-service",
   "version": "1.0.0",
   "main": "server.js",
-  "scripts": { "start": "node server.js" },
+  "scripts": {
+    "start": "node server.js"
+  },
   "dependencies": {
-    "express": "^4.19.2",
+    "@whiskeysockets/baileys": "^7.0.0-rc13",
+    "baileys-mongodb": "^1.0.9",
     "dotenv": "^16.4.5",
-    "@whiskeysockets/baileys": "^6.7.0"
+    "express": "^4.19.2",
+    "mongoose": "^9.7.4",
+    "qrcode": "^1.5.4"
   }
 }
