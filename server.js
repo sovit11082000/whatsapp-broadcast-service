@@ -77,6 +77,64 @@ app.post('/api/send', requireApiKey, async (req, res) => {
   res.status(502).json({ error: 'Failed to send message after 3 attempts' });
 });
 
+app.post('/api/send-instagram', requireApiKey, async (req, res) => {
+  const { imageUrl, caption } = req.body;
+
+  if (!imageUrl || !caption) {
+    return res.status(400).json({ error: 'imageUrl and caption are required' });
+  }
+
+  try {
+    const igAccountId = process.env.INSTAGRAM_ACCOUNT_ID;
+    const accessToken = process.env.INSTAGRAM_ACCESS_TOKEN;
+
+    // Step 1: Container banao
+    const containerRes = await fetch(
+      `https://graph.facebook.com/v21.0/${igAccountId}/media`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image_url: imageUrl,
+          caption: caption,
+          access_token: accessToken,
+        }),
+      }
+    );
+    const containerData = await containerRes.json();
+
+    if (!containerData.id) {
+      console.error('Instagram container error:', containerData);
+      return res.status(502).json({ error: 'Failed to create media container', details: containerData });
+    }
+
+    // Step 2: Publish karo
+    const publishRes = await fetch(
+      `https://graph.facebook.com/v21.0/${igAccountId}/media_publish`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          creation_id: containerData.id,
+          access_token: accessToken,
+        }),
+      }
+    );
+    const publishData = await publishRes.json();
+
+    if (!publishData.id) {
+      console.error('Instagram publish error:', publishData);
+      return res.status(502).json({ error: 'Failed to publish', details: publishData });
+    }
+
+    console.log('✅ Instagram post published:', publishData.id);
+    res.json({ success: true, postId: publishData.id });
+  } catch (err) {
+    console.error('Instagram send error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.listen(process.env.PORT || 4600, () => {
   console.log(`WhatsApp Broadcast Service running on port ${process.env.PORT || 4600}`);
   initWhatsApp();
