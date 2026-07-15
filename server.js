@@ -135,6 +135,43 @@ app.post('/api/send-instagram', requireApiKey, async (req, res) => {
   }
 });
 
+app.post('/api/send-facebook', requireApiKey, async (req, res) => {
+  const { message, link } = req.body;
+
+  if (!message) {
+    return res.status(400).json({ error: 'message is required' });
+  }
+
+  try {
+    const pageId = process.env.FACEBOOK_PAGE_ID;
+    const accessToken = process.env.FACEBOOK_PAGE_ACCESS_TOKEN;
+
+    const body = { message, access_token: accessToken };
+    if (link) body.link = link;
+
+    const fbRes = await fetch(
+      `https://graph.facebook.com/v21.0/${pageId}/feed`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }
+    );
+    const fbData = await fbRes.json();
+
+    if (!fbData.id) {
+      console.error('Facebook post error:', fbData);
+      return res.status(502).json({ error: 'Failed to post to Facebook', details: fbData });
+    }
+
+    console.log('✅ Facebook post published:', fbData.id);
+    res.json({ success: true, postId: fbData.id });
+  } catch (err) {
+    console.error('Facebook send error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.listen(process.env.PORT || 4600, () => {
   console.log(`WhatsApp Broadcast Service running on port ${process.env.PORT || 4600}`);
   initWhatsApp();
