@@ -88,17 +88,12 @@ app.post('/api/send-instagram', requireApiKey, async (req, res) => {
     const igAccountId = process.env.INSTAGRAM_ACCOUNT_ID;
     const accessToken = process.env.INSTAGRAM_ACCESS_TOKEN;
 
-    // Step 1: Container banao
     const containerRes = await fetch(
       `https://graph.facebook.com/v21.0/${igAccountId}/media`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          image_url: imageUrl,
-          caption: caption,
-          access_token: accessToken,
-        }),
+        body: JSON.stringify({ image_url: imageUrl, caption, access_token: accessToken }),
       }
     );
     const containerData = await containerRes.json();
@@ -108,16 +103,33 @@ app.post('/api/send-instagram', requireApiKey, async (req, res) => {
       return res.status(502).json({ error: 'Failed to create media container', details: containerData });
     }
 
-    // Step 2: Publish karo
+    // Container ready hone ka wait karo (poll status)
+    let statusOk = false;
+    for (let i = 0; i < 10; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const statusRes = await fetch(
+        `https://graph.facebook.com/v21.0/${containerData.id}?fields=status_code&access_token=${accessToken}`
+      );
+      const statusData = await statusRes.json();
+      if (statusData.status_code === 'FINISHED') {
+        statusOk = true;
+        break;
+      }
+      if (statusData.status_code === 'ERROR') {
+        return res.status(502).json({ error: 'Media processing failed', details: statusData });
+      }
+    }
+
+    if (!statusOk) {
+      return res.status(504).json({ error: 'Media not ready after waiting, try again' });
+    }
+
     const publishRes = await fetch(
       `https://graph.facebook.com/v21.0/${igAccountId}/media_publish`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          creation_id: containerData.id,
-          access_token: accessToken,
-        }),
+        body: JSON.stringify({ creation_id: containerData.id, access_token: accessToken }),
       }
     );
     const publishData = await publishRes.json();
