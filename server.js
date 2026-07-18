@@ -47,6 +47,10 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', whatsappConnected: isWhatsAppReady() });
 });
 
+app.get('/ping', (req, res) => {
+  res.status(200).send('pong');
+});
+
 app.post('/api/send', requireApiKey, async (req, res) => {
   const { channelId, text } = req.body;
 
