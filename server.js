@@ -256,15 +256,14 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
       if (hasAnim) command.input(animVideoPath).inputOptions(['-stream_loop -1']);
       if (selectedAudioPath) command.input(selectedAudioPath);
 
-      // 2. Solid scaling and positioning filter
+      // Universal Blur Filter (Works 100% on Render/Linux)
       let filterComplex = [
-        "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:10[bg]",
+        "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,avgblur=sizeX=30:sizeY=30[bg]",
         "[0:v]scale=1069:-1:force_original_aspect_ratio=decrease[scaled_job_img]",
-        "[bg][scaled_job_img]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2[bg_with_job]",
-        "[bg_with_job]drawtext=text='Govt Exam Study':fontcolor='#D1D5DB':fontsize=90:x=(1080-tw)/2:y=150:borderw=3:bordercolor='#D1D5DB':box=1:boxcolor=black@0.0:boxborderw=0[v_with_title]"
+        "[bg][scaled_job_img]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2[bg_with_job]"
       ];
 
-      let lastVideoNode = "[v_with_title]";
+      let lastVideoNode = "[bg_with_job]";
       if (hasAnim) {
         filterComplex.push(`[1:v]colorkey=0x000000:0.15:0.1,scale=600:-1[keyed_anim]`);
         filterComplex.push(`${lastVideoNode}[keyed_anim]overlay=(main_w-overlay_w)/2:1500[v_with_anim]`);
