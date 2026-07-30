@@ -280,7 +280,7 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
       }
 
       command
-        .outputOptions(['-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-t', '9', '-preset', 'ultrafast'])
+        .outputOptions(['-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-t', '9', '-preset', 'ultrafast', '-threads', '2'])
         .output(tempOutputPath)
         .on('end', resolve)
         .on('error', reject)
