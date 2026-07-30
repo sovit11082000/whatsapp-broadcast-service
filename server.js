@@ -189,7 +189,7 @@ app.post('/api/send-facebook', requireApiKey, async (req, res) => {
   }
 });
 
-app.post('/api/send-linkedin', async (req, res) => {
+app.post('/api/send-linkedin', requireApiKey, async (req, res) => {
   const { text } = req.body;
   const token = process.env.LINKEDIN_ACCESS_TOKEN;
 
