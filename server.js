@@ -211,16 +211,19 @@ app.post('/api/send-instagram', requireApiKey, async (req, res) => {
   }
 });
 
-// 🚀 MASTER COMBINED ROUTE: HANDLES BOTH PNG & WEBP AUTOMATICALLY
 app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
   const timestamp = Date.now();
   const tempDir = os.tmpdir();
 
-  // 🔍 Check File Extension from URL (Default to .png if not found)
-  const { imageUrl, caption, title, audioUrl } = req.body;
+  const { imageUrl, caption, title, description, audioUrl, hashtags } = req.body;
   if (!imageUrl) {
     return res.status(400).json({ error: 'imageUrl is required' });
   }
+
+  const rawTitle = title || 'Govt Job Update';
+  const finalYtTitle = `${rawTitle} #Shorts`.substring(0, 95);
+  
+  const finalYtDescription = description || caption || 'Latest Govt Job Updates & Notification.';
 
   const urlExt = path.extname(imageUrl.split('?')[0]) || '.png';
   const tempImgPath = path.join(tempDir, `input-${timestamp}${urlExt}`);
@@ -229,35 +232,22 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
   let customAudioPath = null;
   let cloudinaryPublicId = null;
 
-  console.log(`\n🚀 [${new Date().toISOString()}] Starting Universal Reel Pipeline...`);
-  console.log(`🖼️ Detected Image Format: ${urlExt.toUpperCase()}`);
-
   try {
-    // 1. Download dynamic image (PNG/WEBP/JPG supported)
-    console.log(`📥 Downloading image: ${imageUrl}`);
     await downloadFile(imageUrl, tempImgPath);
 
-    // 2. Check animation asset
     const animVideoPath = path.join(__dirname, 'assets/follow-anim.mp4');
     let hasAnim = fs.existsSync(animVideoPath);
 
-    // 3. Audio selection
     let selectedAudioPath = null;
     if (audioUrl) {
-      console.log(`🎧 Downloading custom audio: ${audioUrl}`);
       customAudioPath = path.join(tempDir, `audio-${timestamp}.mp3`);
       await downloadFile(audioUrl, customAudioPath);
       selectedAudioPath = customAudioPath;
     } else {
       const musicDir = path.join(__dirname, 'assets/music');
       selectedAudioPath = getRandomMusicFile(musicDir);
-      if (selectedAudioPath) {
-        console.log(`🎵 Picked music: ${path.basename(selectedAudioPath)}`);
-      }
     }
 
-    // 4. Single FFmpeg Video Generation
-    console.log('🎬 Processing FFmpeg Reel Video (Universal Image Support)...');
     await new Promise((resolve, reject) => {
       let command = ffmpeg();
       command.input('color=c=0x0f172a:s=1080x1920:d=9').inputFormat('lavfi');
@@ -291,24 +281,13 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
       command
         .outputOptions(['-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-t', '9', '-preset', 'ultrafast'])
         .output(tempOutputPath)
-        .on('start', () => console.log("🔧 FFmpeg Executing..."))
-        .on('end', () => {
-          console.log('✅ FFmpeg finished generation successfully!');
-          resolve();
-        })
-        .on('error', (err) => {
-          console.error('❌ FFmpeg error:', err.message);
-          reject(err);
-        })
+        .on('end', resolve)
+        .on('error', reject)
         .run();
     });
 
-    console.log('📲 Multi-Platform Upload Started...');
-
-    // 5. Task A: Upload to Cloudinary & Instagram
     const igTask = (async () => {
       try {
-        console.log('☁️ Uploading to Cloudinary for Instagram...');
         const cloudRes = await cloudinary.uploader.upload(tempOutputPath, {
           resource_type: 'video',
           folder: 'instagram_reels'
@@ -318,7 +297,6 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
         const igAccountId = process.env.INSTAGRAM_ACCOUNT_ID;
         const accessToken = process.env.INSTAGRAM_ACCESS_TOKEN;
 
-        console.log('📲 Sending Reel Container to Instagram...');
         const containerRes = await axios.post(`https://graph.facebook.com/v21.0/${igAccountId}/media`, {
           media_type: 'REELS',
           video_url: cloudRes.secure_url,
@@ -337,67 +315,51 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
           creation_id: creationId,
           access_token: accessToken
         });
-        console.log('✅ Instagram Reel Posted ID:', publishRes.data.id);
         return { success: true, postId: publishRes.data.id };
       } catch (err) {
-        console.error('❌ Instagram Upload Failed:', err.response?.data || err.message);
         return { success: false, error: err.message };
       }
     })();
 
-    // 6. Task B: Direct Stream Upload to YouTube Shorts
     const ytTask = (async () => {
       try {
-        console.log('🚀 Uploading Stream to YouTube Shorts...');
+        const parsedTags = hashtags ? hashtags.replace(/#/g, '').split(' ').filter(Boolean) : ['Shorts', 'GovtJobs'];
+
         const ytResponse = await youtube.videos.insert({
           part: 'snippet,status',
           requestBody: {
             snippet: {
-              title: `${title || caption || 'Govt Job Update'} #Shorts #GovtExamStudy`,
-              description: `${caption || title || 'Latest Govt Job Updates'}\n\n#Shorts #GovtJobs #JobAlert`,
-              tags: ['Shorts', 'GovtJobs', 'JobAlert', 'GovtExamStudy'],
+              title: finalYtTitle,
+              description: finalYtDescription,
+              tags: parsedTags,
               categoryId: '27'
             },
             status: { privacyStatus: 'public', selfDeclaredMadeForKids: false }
           },
           media: { body: fs.createReadStream(tempOutputPath) }
         });
-        console.log('✅ YouTube Short Posted ID:', ytResponse.data.id);
         return { success: true, videoId: ytResponse.data.id };
       } catch (err) {
-        console.error('❌ YouTube Upload Failed:', err.message);
         return { success: false, error: err.message };
       }
     })();
 
-    // Parallel execution
     const [igResult, ytResult] = await Promise.all([igTask, ytTask]);
 
-    // Clean Cloudinary File
     if (cloudinaryPublicId) {
-      try {
-        await cloudinary.uploader.destroy(cloudinaryPublicId, { resource_type: 'video' });
-        console.log('🗑️ Cloudinary file deleted after publish.');
-      } catch (e) {}
+      try { await cloudinary.uploader.destroy(cloudinaryPublicId, { resource_type: 'video' }); } catch (e) {}
     }
 
-    res.json({
-      success: true,
-      instagram: igResult,
-      youtube: ytResult
-    });
+    res.json({ success: true, instagram: igResult, youtube: ytResult });
 
   } catch (err) {
-    console.error('❌ Master Reel Pipeline Error:', err.message);
     res.status(500).json({ error: err.message });
   } finally {
-    // Cleanup temporary local files
     [tempImgPath, tempOutputPath, customAudioPath].forEach(filePath => {
       if (filePath && fs.existsSync(filePath)) {
         try { fs.unlinkSync(filePath); } catch (e) {}
       }
     });
-    console.log('🧹 Temp local files cleaned up.');
   }
 });
 
