@@ -3,6 +3,7 @@ const express = require('express');
 const QRCode = require('qrcode'); // QR generate karne ke liye
 const { initWhatsApp, getSock, isWhatsAppReady, getLatestQr } = require('./waClient');
 
+
 const app = express();
 app.use(express.json());
 
@@ -188,6 +189,66 @@ app.post('/api/send-facebook', requireApiKey, async (req, res) => {
   }
 });
 
+app.post('/api/send-linkedin', async (req, res) => {
+  const { text } = req.body;
+  const token = process.env.LINKEDIN_ACCESS_TOKEN;
+
+  try {
+    let authorUrn = process.env.LINKEDIN_PERSON_URN;
+
+    if (!authorUrn) {
+      const userInfoRes = await fetch('https://api.linkedin.com/v2/userinfo', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const userInfo = await userInfoRes.json();
+
+      if (!userInfo.sub) {
+        console.log("userinfo response:", userInfo);
+        return res.status(400).json({ error: "Person URN nahi mila", details: userInfo });
+      }
+
+      authorUrn = `urn:li:person:${userInfo.sub}`;
+      console.log("Fetched Author URN:", authorUrn);
+    }
+
+    const response = await fetch('https://api.linkedin.com/rest/posts', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'X-Restli-Protocol-Version': '2.0.0',
+        'Linkedin-Version': '202607'
+      },
+      body: JSON.stringify({
+        author: authorUrn,
+        commentary: text || "Govt Exam Study Updates 🚀",
+        visibility: "PUBLIC",
+        distribution: {
+          feedDistribution: "MAIN_FEED",
+          targetEntities: [],
+          thirdPartyDistributionChannels: []
+        },
+        lifecycleState: "PUBLISHED",
+        isReshareDisabledByAuthor: false
+      })
+    });
+
+    const data = await response.text();
+
+    if (response.status === 201) {
+      const postId = response.headers.get('x-restli-id');
+      console.log("Post Success! ID:", postId);
+      return res.json({ success: true, postId, authorUrn });
+    }
+
+    console.log("Response status:", response.status, data);
+    res.status(response.status).send(data);
+
+  } catch (err) {
+    console.error("Error posting to LinkedIn:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 app.listen(process.env.PORT || 4600, () => {
   console.log(`WhatsApp Broadcast Service running on port ${process.env.PORT || 4600}`);
   initWhatsApp();
