@@ -222,7 +222,6 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
 
   const rawTitle = title || 'Govt Job Update';
   const finalYtTitle = `${rawTitle} #Shorts`.substring(0, 95);
-  
   const finalYtDescription = description || caption || 'Latest Govt Job Updates & Notification.';
 
   const urlExt = path.extname(imageUrl.split('?')[0]) || '.png';
@@ -250,28 +249,31 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
 
     await new Promise((resolve, reject) => {
       let command = ffmpeg();
-      command.input('color=c=0x0f172a:s=1080x1920:d=9').inputFormat('lavfi');
+      
+      // 1. Main Job Image as Primary Input (lavfi ki zaroorat khatam!)
       command.input(tempImgPath).inputOptions(['-loop 1']);
 
       if (hasAnim) command.input(animVideoPath).inputOptions(['-stream_loop -1']);
       if (selectedAudioPath) command.input(selectedAudioPath);
 
+      // 2. Solid scaling and positioning filter
       let filterComplex = [
-        "[1:v]scale=1069:-1:force_original_aspect_ratio=decrease[scaled_job_img]",
-        "[0:v][scaled_job_img]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2[bg_with_job]",
+        "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:10[bg]",
+        "[0:v]scale=1069:-1:force_original_aspect_ratio=decrease[scaled_job_img]",
+        "[bg][scaled_job_img]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2[bg_with_job]",
         "[bg_with_job]drawtext=text='Govt Exam Study':fontcolor='#D1D5DB':fontsize=90:x=(1080-tw)/2:y=150:borderw=3:bordercolor='#D1D5DB':box=1:boxcolor=black@0.0:boxborderw=0[v_with_title]"
       ];
 
       let lastVideoNode = "[v_with_title]";
       if (hasAnim) {
-        filterComplex.push(`[2:v]colorkey=0x000000:0.15:0.1,scale=600:-1[keyed_anim]`);
+        filterComplex.push(`[1:v]colorkey=0x000000:0.15:0.1,scale=600:-1[keyed_anim]`);
         filterComplex.push(`${lastVideoNode}[keyed_anim]overlay=(main_w-overlay_w)/2:1500[v_with_anim]`);
         lastVideoNode = "[v_with_anim]";
       }
 
       command.complexFilter(filterComplex);
 
-      const audioInputIndex = hasAnim ? 3 : 2;
+      const audioInputIndex = hasAnim ? 2 : 1;
       if (selectedAudioPath) {
         command.outputOptions(['-map', lastVideoNode, '-map', `${audioInputIndex}:a`, '-c:a', 'aac', '-b:a', '128k', '-shortest']);
       } else {
