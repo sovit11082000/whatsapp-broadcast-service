@@ -220,6 +220,8 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
     return res.status(400).json({ error: 'imageUrl is required' });
   }
 
+  console.log(`🚀 [REEL SERVICE] Request Received for: "${title || 'Job Update'}"`);
+
   const rawTitle = title || 'Govt Job Update';
   const finalYtTitle = `${rawTitle} #Shorts`.substring(0, 95);
   const finalYtDescription = description || caption || 'Latest Govt Job Updates & Notification.';
@@ -250,13 +252,10 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
     await new Promise((resolve, reject) => {
       let command = ffmpeg();
       
-      // 1. Main Job Image as Primary Input (lavfi ki zaroorat khatam!)
       command.input(tempImgPath).inputOptions(['-loop 1']);
-
       if (hasAnim) command.input(animVideoPath).inputOptions(['-stream_loop -1']);
       if (selectedAudioPath) command.input(selectedAudioPath);
 
-      // Universal Blur Filter (Works 100% on Render/Linux)
       let filterComplex = [
         "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,avgblur=sizeX=30:sizeY=30[bg]",
         "[0:v]scale=1069:-1:force_original_aspect_ratio=decrease[scaled_job_img]",
@@ -264,6 +263,7 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
       ];
 
       let lastVideoNode = "[bg_with_job]";
+
       if (hasAnim) {
         filterComplex.push(`[1:v]colorkey=0x000000:0.15:0.1,scale=600:-1[keyed_anim]`);
         filterComplex.push(`${lastVideoNode}[keyed_anim]overlay=(main_w-overlay_w)/2:1500[v_with_anim]`);
@@ -318,7 +318,7 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
         });
         return { success: true, postId: publishRes.data.id };
       } catch (err) {
-        return { success: false, error: err.message };
+        return { success: false, error: err.response?.data || err.message };
       }
     })();
 
@@ -341,7 +341,7 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
         });
         return { success: true, videoId: ytResponse.data.id };
       } catch (err) {
-        return { success: false, error: err.message };
+        return { success: false, error: err.response?.data || err.message };
       }
     })();
 
@@ -351,9 +351,11 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
       try { await cloudinary.uploader.destroy(cloudinaryPublicId, { resource_type: 'video' }); } catch (e) {}
     }
 
+    console.log(`✅ [REEL SERVICE] Process Complete! IG: ${igResult.success}, YT: ${ytResult.success}`);
     res.json({ success: true, instagram: igResult, youtube: ytResult });
 
   } catch (err) {
+    console.error(`❌ [REEL SERVICE] Error:`, err.message);
     res.status(500).json({ error: err.message });
   } finally {
     [tempImgPath, tempOutputPath, customAudioPath].forEach(filePath => {
