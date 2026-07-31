@@ -255,17 +255,15 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
     await new Promise((resolve, reject) => {
       let command = ffmpeg();
       
-      // Input 0: Primary Job Image
       command.input(tempImgPath).inputOptions(['-loop 1']);
 
-      // Dynamic Inputs
       if (hasLogo) command.input(logoPath).inputOptions(['-loop 1']);
       if (hasAnim) command.input(animVideoPath).inputOptions(['-stream_loop -1']);
       if (selectedAudioPath) command.input(selectedAudioPath);
 
-      // Step 1: Base Blur + Center Job Poster
+      // Low-RAM Filter Complex (Scaling blur down to saving RAM)
       let filterComplex = [
-        "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,avgblur=sizeX=30:sizeY=30[bg]",
+        "[0:v]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,avgblur=sizeX=15:sizeY=15,scale=1080:1920[bg]",
         "[0:v]scale=1069:-1:force_original_aspect_ratio=decrease[scaled_job_img]",
         "[bg][scaled_job_img]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2[bg_with_job]"
       ];
@@ -273,7 +271,6 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
       let lastVideoNode = "[bg_with_job]";
       let currentInputIndex = 1;
 
-      // Step 2: Overlay Top Logo PNG
       if (hasLogo) {
         filterComplex.push(`[${currentInputIndex}:v]scale=600:-1[scaled_logo]`);
         filterComplex.push(`${lastVideoNode}[scaled_logo]overlay=(main_w-overlay_w)/2:120[v_with_logo]`);
@@ -281,7 +278,6 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
         currentInputIndex++;
       }
 
-      // Step 3: Overlay Bottom MP4 Animation
       if (hasAnim) {
         filterComplex.push(`[${currentInputIndex}:v]colorkey=0x000000:0.15:0.1,scale=600:-1[keyed_anim]`);
         filterComplex.push(`${lastVideoNode}[keyed_anim]overlay=(main_w-overlay_w)/2:1500[v_with_anim]`);
@@ -298,8 +294,16 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
         command.outputOptions(['-map', lastVideoNode]);
       }
 
+      // Memory Control Options (-threads 1 & low buffer)
       command
-        .outputOptions(['-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-t', '9', '-preset', 'ultrafast', '-threads', '2'])
+        .outputOptions([
+          '-c:v', 'libx264',
+          '-pix_fmt', 'yuv420p',
+          '-t', '9',
+          '-preset', 'superfast',
+          '-threads', '1',
+          '-max_muxing_queue_size', '1024'
+        ])
         .output(tempOutputPath)
         .on('end', resolve)
         .on('error', reject)
