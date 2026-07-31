@@ -256,13 +256,15 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
       if (hasAnim) command.input(animVideoPath).inputOptions(['-stream_loop -1']);
       if (selectedAudioPath) command.input(selectedAudioPath);
 
+      // Blurred Background + Center Image + Brand Name Text
       let filterComplex = [
         "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,avgblur=sizeX=30:sizeY=30[bg]",
         "[0:v]scale=1069:-1:force_original_aspect_ratio=decrease[scaled_job_img]",
-        "[bg][scaled_job_img]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2[bg_with_job]"
+        "[bg][scaled_job_img]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2[bg_with_job]",
+        "[bg_with_job]drawtext=text='Govt Exam Study':fontcolor=black:fontsize=95:x=(w-tw)/2:y=150:box=1:boxcolor=white@0.8:boxborderw=15[v_with_title]"
       ];
 
-      let lastVideoNode = "[bg_with_job]";
+      let lastVideoNode = "[v_with_title]";
 
       if (hasAnim) {
         filterComplex.push(`[1:v]colorkey=0x000000:0.15:0.1,scale=600:-1[keyed_anim]`);
