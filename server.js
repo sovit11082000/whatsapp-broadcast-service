@@ -263,8 +263,8 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
 
       // Low-RAM Filter Complex (Scaling blur down to saving RAM)
       let filterComplex = [
-        "[0:v]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,avgblur=sizeX=15:sizeY=15,scale=1080:1920[bg]",
-        "[0:v]scale=1069:-1:force_original_aspect_ratio=decrease[scaled_job_img]",
+        "[0:v]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,avgblur=sizeX=8:sizeY=8,scale=720:1280[bg]",
+        "[0:v]scale=713:-1:force_original_aspect_ratio=decrease[scaled_job_img]",
         "[bg][scaled_job_img]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2[bg_with_job]"
       ];
 
@@ -300,7 +300,7 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
           '-c:v', 'libx264',
           '-pix_fmt', 'yuv420p',
           '-t', '9',
-          '-preset', 'superfast',
+          '-preset', 'ultrafast',
           '-threads', '1',
           '-max_muxing_queue_size', '1024'
         ])
