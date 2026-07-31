@@ -17,21 +17,16 @@ const downloadFile = async (url, outputPath) => {
 };
 
 async function testFinalReelLayout() {
-    console.log("🚀 Testing Layout: Centered Dark White Bold Title (Size 25) + MP4 Anim (No Logo)...\n");
+    console.log("🚀 Testing Layout: Blur BG + Center Job Poster + Logo Overlay + MP4 Anim...\n");
 
     const testImageUrl = 'https://gstatic.com/webp/gallery/1.webp'; 
     const tempImgPath = path.join(__dirname, 'test-input.webp');
     const outputPath = path.join(__dirname, 'output-final-reel.mp4');
     
-    const templatePath = path.join(__dirname, 'assets/reel-template.webp');
+    const logoPath = path.join(__dirname, 'assets/logo.png');
     const animVideoPath = path.join(__dirname, 'assets/follow-anim.mp4');
 
     try {
-        if (!fs.existsSync(templatePath)) {
-            console.error("❌ Error: assets/reel-template.webp nahi mila!");
-            return;
-        }
-
         console.log("📥 Downloading test image...");
         await downloadFile(testImageUrl, tempImgPath);
 
@@ -48,11 +43,15 @@ async function testFinalReelLayout() {
         console.log("🎬 Constructing FFmpeg Command...");
         let command = ffmpeg();
 
-        // Input 0: Dark Base Canvas (1080x1920)
-        command.input('color=c=0x0f172a:s=1080x1920:d=9').inputFormat('lavfi');
-        
-        // Input 1: Job Image (reel-template.webp)
-        command.input(templatePath).inputOptions(['-loop 1']);
+        // Input 0: Primary Job Image (For BG Blur & Center Image)
+        command.input(tempImgPath).inputOptions(['-loop 1']);
+
+        // Input 1: Top Header Logo PNG (If available)
+        let hasLogo = fs.existsSync(logoPath);
+        if (hasLogo) {
+            console.log("🎨 Logo found: assets/logo.png");
+            command.input(logoPath).inputOptions(['-loop 1']);
+        }
 
         // Input 2: Subscribe MP4 Animation Video
         let hasAnim = fs.existsSync(animVideoPath);
@@ -66,31 +65,36 @@ async function testFinalReelLayout() {
         }
 
         // --- FILTER COMPLEX ---
+        // Step 1: Create 1080x1920 Blurred Background + Overlay Center Scaled Image
         let filterComplex = [
-            // Step 1: Scale Job Image to 99% (1069px) & Center in canvas
-            "[1:v]scale=1069:-1:force_original_aspect_ratio=decrease[scaled_job_img]",
-            "[0:v][scaled_job_img]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2[bg_with_job]"
+            "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,avgblur=sizeX=30:sizeY=30[bg]",
+            "[0:v]scale=1069:-1:force_original_aspect_ratio=decrease[scaled_job_img]",
+            "[bg][scaled_job_img]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2[bg_with_job]"
         ];
 
         let lastVideoNode = "[bg_with_job]";
+        let currentInputIndex = 1;
 
-        // Step 2: Center Top Title - "Govt Exam Study"
-        // Dark White/Off-White (#E2E8F0), Font Size 25, Transparent Background with Subtle Shadow Box
-        filterComplex.push(
-            `${lastVideoNode}drawtext=text='Govt Exam Study':fontcolor='#D1D5DB':fontsize=90:x=(1080-tw)/2:y=150:borderw=3:bordercolor='#D1D5DB':box=1:boxcolor=black@0.0:boxborderw=0[v_with_title]`
-        );
-        lastVideoNode = "[v_with_title]";
+        // Step 2: Overlay Logo at Top Header
+        if (hasLogo) {
+            // Scale logo to width ~600px maintaining aspect ratio
+            filterComplex.push(`[${currentInputIndex}:v]scale=600:-1[scaled_logo]`);
+            filterComplex.push(`${lastVideoNode}[scaled_logo]overlay=(main_w-overlay_w)/2:120[v_with_logo]`);
+            lastVideoNode = "[v_with_logo]";
+            currentInputIndex++;
+        }
 
         // Step 3: Bottom Subscribe MP4 Animation
         if (hasAnim) {
-            filterComplex.push(`[2:v]colorkey=0x000000:0.15:0.1,scale=600:-1[keyed_anim]`);
+            filterComplex.push(`[${currentInputIndex}:v]colorkey=0x000000:0.15:0.1,scale=600:-1[keyed_anim]`);
             filterComplex.push(`${lastVideoNode}[keyed_anim]overlay=(main_w-overlay_w)/2:1500[v_with_anim]`);
             lastVideoNode = "[v_with_anim]";
+            currentInputIndex++;
         }
 
         command.complexFilter(filterComplex);
 
-        const audioInputIndex = hasAnim ? 3 : 2;
+        const audioInputIndex = currentInputIndex;
 
         if (selectedAudioPath) {
             command.outputOptions([

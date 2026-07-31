@@ -236,8 +236,11 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
   try {
     await downloadFile(imageUrl, tempImgPath);
 
+    const logoPath = path.join(__dirname, 'assets/logo.png');
+    const hasLogo = fs.existsSync(logoPath);
+
     const animVideoPath = path.join(__dirname, 'assets/follow-anim.mp4');
-    let hasAnim = fs.existsSync(animVideoPath);
+    const hasAnim = fs.existsSync(animVideoPath);
 
     let selectedAudioPath = null;
     if (audioUrl) {
@@ -252,29 +255,43 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
     await new Promise((resolve, reject) => {
       let command = ffmpeg();
       
+      // Input 0: Primary Job Image
       command.input(tempImgPath).inputOptions(['-loop 1']);
+
+      // Dynamic Inputs
+      if (hasLogo) command.input(logoPath).inputOptions(['-loop 1']);
       if (hasAnim) command.input(animVideoPath).inputOptions(['-stream_loop -1']);
       if (selectedAudioPath) command.input(selectedAudioPath);
 
-      // Blurred Background + Center Image + Brand Name Text
+      // Step 1: Base Blur + Center Job Poster
       let filterComplex = [
         "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,avgblur=sizeX=30:sizeY=30[bg]",
         "[0:v]scale=1069:-1:force_original_aspect_ratio=decrease[scaled_job_img]",
-        "[bg][scaled_job_img]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2[bg_with_job]",
-        "[bg_with_job]drawtext=text='Govt Exam Study':fontcolor=black:fontsize=95:x=(w-tw)/2:y=150:box=1:boxcolor=white@0.8:boxborderw=15[v_with_title]"
+        "[bg][scaled_job_img]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2[bg_with_job]"
       ];
 
-      let lastVideoNode = "[v_with_title]";
+      let lastVideoNode = "[bg_with_job]";
+      let currentInputIndex = 1;
 
+      // Step 2: Overlay Top Logo PNG
+      if (hasLogo) {
+        filterComplex.push(`[${currentInputIndex}:v]scale=600:-1[scaled_logo]`);
+        filterComplex.push(`${lastVideoNode}[scaled_logo]overlay=(main_w-overlay_w)/2:120[v_with_logo]`);
+        lastVideoNode = "[v_with_logo]";
+        currentInputIndex++;
+      }
+
+      // Step 3: Overlay Bottom MP4 Animation
       if (hasAnim) {
-        filterComplex.push(`[1:v]colorkey=0x000000:0.15:0.1,scale=600:-1[keyed_anim]`);
+        filterComplex.push(`[${currentInputIndex}:v]colorkey=0x000000:0.15:0.1,scale=600:-1[keyed_anim]`);
         filterComplex.push(`${lastVideoNode}[keyed_anim]overlay=(main_w-overlay_w)/2:1500[v_with_anim]`);
         lastVideoNode = "[v_with_anim]";
+        currentInputIndex++;
       }
 
       command.complexFilter(filterComplex);
 
-      const audioInputIndex = hasAnim ? 2 : 1;
+      const audioInputIndex = currentInputIndex;
       if (selectedAudioPath) {
         command.outputOptions(['-map', lastVideoNode, '-map', `${audioInputIndex}:a`, '-c:a', 'aac', '-b:a', '128k', '-shortest']);
       } else {
@@ -367,7 +384,6 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
     });
   }
 });
-
 // --- Facebook Route ---
 app.post('/api/send-facebook', requireApiKey, async (req, res) => {
   const { message, link } = req.body;
