@@ -222,7 +222,7 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
 
   console.log(`🚀 [REEL SERVICE] Request Received for: "${title || 'Job Update'}"`);
 
-  const rawTitle = title || 'Govt Job Update';
+  let rawTitle = title || 'Govt Job Update';
   rawTitle = rawTitle
   .replace(/\|?\s*new update/gi, '')
   .replace(/\|?\s*new/gi, '')
