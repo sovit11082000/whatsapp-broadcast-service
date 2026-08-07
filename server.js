@@ -48,20 +48,24 @@ function requireApiKey(req, res, next) {
   next();
 }
 
-// Helper: Download file to local temp path
-const downloadFile = async (url, outputPath) => {
-  const writer = fs.createWriteStream(outputPath);
+async function downloadFile(url, targetPath) {
   const response = await axios({
     url,
     method: 'GET',
-    responseType: 'stream'
+    responseType: 'stream',
+    timeout: 20000, // 20 seconds timeout limit
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
   });
-  response.data.pipe(writer);
+
   return new Promise((resolve, reject) => {
+    const writer = fs.createWriteStream(targetPath);
+    response.data.pipe(writer);
     writer.on('finish', resolve);
     writer.on('error', reject);
   });
-};
+}
 
 // Helper: Pick random MP3 file from assets/music/
 const getRandomMusicFile = (musicFolderPath) => {
@@ -379,7 +383,7 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
         return { success: false, error: err.response?.data || err.message };
       }
     })();
-    
+
     const [igResult, ytResult] = await Promise.all([igTask, ytTask]);
 
     if (cloudinaryPublicId) {
