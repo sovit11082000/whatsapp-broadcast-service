@@ -353,6 +353,10 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
       try {
         const parsedTags = hashtags ? hashtags.replace(/#/g, '').split(' ').filter(Boolean) : ['Shorts', 'GovtJobs'];
 
+        if (!fs.existsSync(tempOutputPath)) {
+          throw new Error("Rendered output file path par nahi mili!");
+        }
+
         const ytResponse = await youtube.videos.insert({
           part: 'snippet,status',
           requestBody: {
@@ -366,12 +370,16 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
           },
           media: { body: fs.createReadStream(tempOutputPath) }
         });
+        
+        console.log(`✅ [YouTube Shorts Success] Video ID: ${ytResponse.data.id}`);
         return { success: true, videoId: ytResponse.data.id };
       } catch (err) {
+        // 🔴 YE CONSOLE LOG YAHAN ADD HUA HAI - EXACT ERROR DIKHEGA
+        console.error("❌ [YouTube Error Details]:", err.response?.data || err.message);
         return { success: false, error: err.response?.data || err.message };
       }
     })();
-
+    
     const [igResult, ytResult] = await Promise.all([igTask, ytTask]);
 
     if (cloudinaryPublicId) {
@@ -390,43 +398,6 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
         try { fs.unlinkSync(filePath); } catch (e) {}
       }
     });
-  }
-});
-// --- Facebook Route ---
-app.post('/api/send-facebook', requireApiKey, async (req, res) => {
-  const { message, link } = req.body;
-
-  if (!message) {
-    return res.status(400).json({ error: 'message is required' });
-  }
-
-  try {
-    const pageId = process.env.FACEBOOK_PAGE_ID;
-    const accessToken = process.env.FACEBOOK_PAGE_ACCESS_TOKEN;
-
-    const body = { message, access_token: accessToken };
-    if (link) body.link = link;
-
-    const fbRes = await fetch(
-      `https://graph.facebook.com/v21.0/${pageId}/feed`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      }
-    );
-    const fbData = await fbRes.json();
-
-    if (!fbData.id) {
-      console.error('Facebook post error:', fbData);
-      return res.status(502).json({ error: 'Failed to post to Facebook', details: fbData });
-    }
-
-    console.log('✅ Facebook post published:', fbData.id);
-    res.json({ success: true, postId: fbData.id });
-  } catch (err) {
-    console.error('Facebook send error:', err.message);
-    res.status(500).json({ error: err.message });
   }
 });
 
