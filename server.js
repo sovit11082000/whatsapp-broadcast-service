@@ -481,6 +481,50 @@ app.post('/api/send-linkedin', requireApiKey, async (req, res) => {
   }
 });
 
+// --- Quora Formatter & Telegram Dispatch Route ---
+app.post('/api/send-quora-dispatch', requireApiKey, async (req, res) => {
+  const { title, summary, eligibility, applyUrl } = req.body;
+
+  if (!title) {
+    return res.status(400).json({ error: 'title is required' });
+  }
+
+  // Quora Ready Formatted Text Block
+  const quoraPostText = `📢 ${title}\n\n` +
+    `📌 Key Details & Eligibility:\n${eligibility || 'Check official guidelines on the portal for detailed eligibility.'}\n\n` +
+    `📝 Brief Summary:\n${summary || 'Latest government recruitment and exam updates.'}\n\n` +
+    `🔗 Apply Online & Official Notification:\n${applyUrl || 'https://sarkariresultlive.site'}`;
+
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
+  const quoraSpaceUrl = process.env.QUORA_SPACE_URL || 'https://www.quora.com';
+
+  try {
+    const tgPayload = {
+      chat_id: chatId,
+      text: `🚀 *New Post Ready for Quora Space!*\n\n\`\`\`\n${quoraPostText}\n\`\`\``,
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🌐 Open Quora Space', url: quoraSpaceUrl }]
+        ]
+      }
+    };
+
+    await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, tgPayload);
+    console.log('✅ Quora dispatch card successfully sent to Admin Telegram!');
+
+    return res.json({
+      success: true,
+      message: 'Dispatch card sent to Admin Telegram',
+      formattedText: quoraPostText
+    });
+  } catch (err) {
+    console.error('❌ Telegram Dispatch Error:', err.response?.data || err.message);
+    return res.status(500).json({ error: 'Failed to send Telegram dispatch card', details: err.message });
+  }
+});
+
 app.listen(process.env.PORT || 4600, () => {
   console.log(`WhatsApp Broadcast Service running on port ${process.env.PORT || 4600}`);
   initWhatsApp();
