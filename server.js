@@ -22,22 +22,6 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// 🔴 YouTube OAuth2 Client Setup
-const oauth2Client = new google.auth.OAuth2(
-  process.env.YOUTUBE_CLIENT_ID,
-  process.env.YOUTUBE_CLIENT_SECRET,
-  'https://developers.google.com/oauthplayground'
-);
-
-oauth2Client.setCredentials({
-  refresh_token: process.env.YOUTUBE_REFRESH_TOKEN
-});
-
-const youtube = google.youtube({
-  version: 'v3',
-  auth: oauth2Client
-});
-
 const app = express();
 app.use(express.json());
 
@@ -215,6 +199,30 @@ app.post('/api/send-instagram', requireApiKey, async (req, res) => {
   }
 });
 
+// --- YouTube Multi-Key Pool Helper ---
+function getYouTubeCredentialsPool() {
+  if (process.env.YOUTUBE_ACCOUNTS_POOL) {
+    try {
+      const pool = JSON.parse(process.env.YOUTUBE_ACCOUNTS_POOL);
+      if (Array.isArray(pool) && pool.length > 0) return pool;
+    } catch (e) {
+      console.error('❌ [YouTube Pool] Failed to parse YOUTUBE_ACCOUNTS_POOL JSON from .env:', e.message);
+    }
+  }
+
+  if (process.env.YOUTUBE_CLIENT_ID && process.env.YOUTUBE_CLIENT_SECRET && process.env.YOUTUBE_REFRESH_TOKEN) {
+    return [{
+      clientId: process.env.YOUTUBE_CLIENT_ID,
+      clientSecret: process.env.YOUTUBE_CLIENT_SECRET,
+      refreshToken: process.env.YOUTUBE_REFRESH_TOKEN
+    }];
+  }
+
+  return [];
+}
+
+let activeYouTubeKeyIndex = 0;
+
 app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
   const timestamp = Date.now();
   const tempDir = os.tmpdir();
@@ -354,34 +362,75 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
     })();
 
     const ytTask = (async () => {
-      try {
-        const parsedTags = hashtags ? hashtags.replace(/#/g, '').split(' ').filter(Boolean) : ['Shorts', 'GovtJobs'];
+      const parsedTags = hashtags ? hashtags.replace(/#/g, '').split(' ').filter(Boolean) : ['Shorts', 'GovtJobs'];
 
-        if (!fs.existsSync(tempOutputPath)) {
-          throw new Error("Rendered output file path par nahi mili!");
-        }
-
-        const ytResponse = await youtube.videos.insert({
-          part: 'snippet,status',
-          requestBody: {
-            snippet: {
-              title: finalYtTitle,
-              description: finalYtDescription,
-              tags: parsedTags,
-              categoryId: '27'
-            },
-            status: { privacyStatus: 'public', selfDeclaredMadeForKids: false }
-          },
-          media: { body: fs.createReadStream(tempOutputPath) }
-        });
-        
-        console.log(`✅ [YouTube Shorts Success] Video ID: ${ytResponse.data.id}`);
-        return { success: true, videoId: ytResponse.data.id };
-      } catch (err) {
-        // 🔴 YE CONSOLE LOG YAHAN ADD HUA HAI - EXACT ERROR DIKHEGA
-        console.error("❌ [YouTube Error Details]:", err.response?.data || err.message);
-        return { success: false, error: err.response?.data || err.message };
+      if (!fs.existsSync(tempOutputPath)) {
+        return { success: false, error: "Rendered output file path par nahi mili!" };
       }
+
+      const pool = getYouTubeCredentialsPool();
+      if (!pool.length) {
+        console.error("❌ [YouTube Error]: No YouTube API credentials configured in .env");
+        return { success: false, error: "No YouTube credentials found in .env" };
+      }
+
+      let lastError = null;
+
+      for (let attempt = 0; attempt < pool.length; attempt++) {
+        const targetIndex = (activeYouTubeKeyIndex + attempt) % pool.length;
+        const creds = pool[targetIndex];
+
+        console.log(`🔄 [YouTube Upload] Trying Account #${targetIndex + 1} of ${pool.length}...`);
+
+        try {
+          const oauth2Client = new google.auth.OAuth2(
+            creds.clientId,
+            creds.clientSecret,
+            'https://developers.google.com/oauthplayground'
+          );
+
+          oauth2Client.setCredentials({ refresh_token: creds.refreshToken });
+          const ytInstance = google.youtube({ version: 'v3', auth: oauth2Client });
+
+          const ytResponse = await ytInstance.videos.insert({
+            part: 'snippet,status',
+            requestBody: {
+              snippet: {
+                title: finalYtTitle,
+                description: finalYtDescription,
+                tags: parsedTags,
+                categoryId: '27'
+              },
+              status: { privacyStatus: 'public', selfDeclaredMadeForKids: false }
+            },
+            media: { body: fs.createReadStream(tempOutputPath) }
+          });
+          
+          console.log(`✅ [YouTube Shorts Success] Uploaded using Account #${targetIndex + 1}! Video ID: ${ytResponse.data.id}`);
+          activeYouTubeKeyIndex = targetIndex;
+          return { success: true, videoId: ytResponse.data.id, accountIndex: targetIndex + 1 };
+        } catch (err) {
+          lastError = err.response?.data || err.message;
+          const isQuota = 
+            err?.response?.data?.error?.errors?.some(e => e.reason === 'quotaExceeded') ||
+            err?.response?.data?.error?.code === 403 ||
+            err?.message?.includes('quota') ||
+            err?.response?.data?.error === 'invalid_grant';
+
+          console.warn(`⚠️ [YouTube Warning] Account #${targetIndex + 1} Failed:`, lastError);
+
+          if (isQuota && pool.length > 1) {
+            console.log(`⏭️ Quota/Auth issue on Account #${targetIndex + 1}, switching to next key...`);
+            continue;
+          } else if (pool.length > 1) {
+            console.log(`⏭️ Retrying with next API account in pool...`);
+            continue;
+          }
+        }
+      }
+
+      console.error("❌ [YouTube Error Details]: All accounts in pool failed.", lastError);
+      return { success: false, error: lastError };
     })();
 
     const [igResult, ytResult] = await Promise.all([igTask, ytTask]);
