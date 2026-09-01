@@ -236,9 +236,9 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
 
   let rawTitle = title || 'Govt Job Update';
   rawTitle = rawTitle
-  .replace(/\|?\s*new update/gi, '')
-  .replace(/\|?\s*new/gi, '')
-  .trim();
+    .replace(/\|?\s*new update/gi, '')
+    .replace(/\|?\s*new/gi, '')
+    .trim();
   const finalYtTitle = `${rawTitle} #Shorts`.substring(0, 95);
   const finalYtDescription = description || caption || 'Latest Govt Job Updates & Notification.';
 
@@ -326,6 +326,7 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
         .run();
     });
 
+    // 1. Instagram Reels Task
     const igTask = (async () => {
       try {
         const cloudRes = await cloudinary.uploader.upload(tempOutputPath, {
@@ -357,10 +358,13 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
         });
         return { success: true, postId: publishRes.data.id };
       } catch (err) {
-        return { success: false, error: err.response?.data || err.message };
+        const errMsg = err.response?.data || err.message;
+        console.error('❌ [Instagram Reel Error Details]:', JSON.stringify(errMsg, null, 2));
+        return { success: false, error: errMsg };
       }
     })();
 
+    // 2. YouTube Shorts Task
     const ytTask = (async () => {
       const parsedTags = hashtags ? hashtags.replace(/#/g, '').split(' ').filter(Boolean) : ['Shorts', 'GovtJobs'];
 
@@ -433,14 +437,83 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
       return { success: false, error: lastError };
     })();
 
-    const [igResult, ytResult] = await Promise.all([igTask, ytTask]);
+    // 3. Facebook Reel Task
+    const fbReelTask = (async () => {
+      try {
+        const systemUserToken = process.env.INSTAGRAM_ACCESS_TOKEN;
+        if (!systemUserToken) return { success: false, error: 'INSTAGRAM_ACCESS_TOKEN missing in .env' };
+
+        // Page token aur ID dynamically fetch karo
+        const accountsRes = await axios.get(
+          `https://graph.facebook.com/v22.0/me/accounts?access_token=${systemUserToken}`
+        );
+        const pages = accountsRes.data.data;
+        if (!pages || pages.length === 0) {
+          return { success: false, error: 'No FB Pages found for System User' };
+        }
+
+        const targetPageId = process.env.FB_PAGE_ID || process.env.FACEBOOK_PAGE_ID;
+        const targetPage = targetPageId 
+          ? pages.find(p => p.id === targetPageId) || pages[0]
+          : pages[0];
+
+        const pageToken = targetPage.access_token;
+        const pageId = targetPage.id;
+
+        // Step A: Initialize Reel Upload
+        const initRes = await axios.post(
+          `https://graph.facebook.com/v22.0/${pageId}/video_reels`,
+          {
+            upload_phase: 'start',
+            access_token: pageToken
+          }
+        );
+
+        const videoId = initRes.data.video_id;
+        const uploadUrl = initRes.data.upload_url;
+
+        // Step B: Upload Video Buffer
+        const videoBuffer = fs.readFileSync(tempOutputPath);
+        await axios.post(uploadUrl, videoBuffer, {
+          headers: {
+            'Authorization': `OAuth ${pageToken}`,
+            'offset': '0',
+            'file_size': videoBuffer.length.toString(),
+            'Content-Type': 'application/octet-stream'
+          }
+        });
+
+        // Step C: Publish Reel
+        await axios.post(
+          `https://graph.facebook.com/v22.0/${pageId}/video_reels`,
+          {
+            upload_phase: 'finish',
+            access_token: pageToken,
+            video_id: videoId,
+            video_state: 'PUBLISHED',
+            description: caption || title || 'Govt Exam Study Updates 🚀'
+          }
+        );
+
+        console.log(`✅ [Facebook Reel Success] Published to Page "${targetPage.name}"! Video ID: ${videoId}`);
+        return { success: true, videoId: videoId, pageName: targetPage.name };
+
+      } catch (err) {
+        const errDetails = err.response?.data || err.message;
+        console.error('❌ [Facebook Reel Error]:', errDetails);
+        return { success: false, error: errDetails };
+      }
+    })();
+
+    // Teeno platform ko parallelly run karo
+    const [igResult, ytResult, fbResult] = await Promise.all([igTask, ytTask, fbReelTask]);
 
     if (cloudinaryPublicId) {
       try { await cloudinary.uploader.destroy(cloudinaryPublicId, { resource_type: 'video' }); } catch (e) {}
     }
 
-    console.log(`✅ [REEL SERVICE] Process Complete! IG: ${igResult.success}, YT: ${ytResult.success}`);
-    res.json({ success: true, instagram: igResult, youtube: ytResult });
+    console.log(`✅ [REEL SERVICE] Process Complete! IG: ${igResult.success}, YT: ${ytResult.success}, FB: ${fbResult.success}`);
+    res.json({ success: true, instagram: igResult, youtube: ytResult, facebook: fbResult });
 
   } catch (err) {
     console.error(`❌ [REEL SERVICE] Error:`, err.message);
@@ -530,6 +603,72 @@ app.post('/api/send-linkedin', requireApiKey, async (req, res) => {
   }
 });
 
+// --- Facebook Page Route (Auto-detects Page & Token) ---
+app.post('/api/send-facebook', requireApiKey, async (req, res) => {
+  const { imageUrl, message, link } = req.body;
+  const systemUserToken = process.env.INSTAGRAM_ACCESS_TOKEN;
+
+  if (!systemUserToken) {
+    return res.status(400).json({ error: 'INSTAGRAM_ACCESS_TOKEN is missing in .env' });
+  }
+
+  try {
+    // 1. System User se linked Pages aur unke Access Tokens fetch karo
+    const accountsRes = await axios.get(
+      `https://graph.facebook.com/v22.0/me/accounts?access_token=${systemUserToken}`
+    );
+
+    const pages = accountsRes.data.data;
+    if (!pages || pages.length === 0) {
+      return res.status(404).json({
+        error: 'No Facebook Pages found associated with this System User. Check Assigned Assets in Business Suite.'
+      });
+    }
+
+    // Configured Page ID match karo, ya pehla available page le lo
+    const targetPageId = process.env.FB_PAGE_ID || process.env.FACEBOOK_PAGE_ID;
+    const targetPage = targetPageId 
+      ? pages.find(p => p.id === targetPageId) || pages[0]
+      : pages[0];
+
+    console.log(`📌 Using Facebook Page: "${targetPage.name}" (ID: ${targetPage.id})`);
+
+    const pageAccessToken = targetPage.access_token;
+    const activePageId = targetPage.id;
+
+    // 2. Page par post publish karo
+    let fbEndpoint = `https://graph.facebook.com/v22.0/${activePageId}/feed`;
+    let payload = {
+      message: message || "Govt Exam Study Updates 🚀",
+      access_token: pageAccessToken
+    };
+
+    if (imageUrl) {
+      fbEndpoint = `https://graph.facebook.com/v22.0/${activePageId}/photos`;
+      payload = {
+        url: imageUrl,
+        caption: message || "Govt Exam Study Updates 🚀",
+        access_token: pageAccessToken
+      };
+    } else if (link) {
+      payload.link = link;
+    }
+
+    const postRes = await axios.post(fbEndpoint, payload);
+    console.log('✅ Facebook Page post published successfully:', postRes.data.id || postRes.data.post_id);
+    res.json({ 
+      success: true, 
+      pageName: targetPage.name,
+      pageId: activePageId,
+      postId: postRes.data.id || postRes.data.post_id 
+    });
+
+  } catch (err) {
+    const errorData = err.response?.data || err.message;
+    console.error('❌ Facebook Page post error:', errorData);
+    res.status(500).json({ error: errorData });
+  }
+});
 // --- Quora Formatter & Telegram Dispatch Route ---
 app.post('/api/send-quora-dispatch', requireApiKey, async (req, res) => {
   const { title, summary, eligibility, applyUrl } = req.body;
