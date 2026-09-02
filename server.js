@@ -677,21 +677,30 @@ app.post('/api/send-quora-dispatch', requireApiKey, async (req, res) => {
     return res.status(400).json({ error: 'title is required' });
   }
 
-  // Quora Ready Formatted Text Block
-  const quoraPostText = `📢 ${title}\n\n` +
-    `📌 Key Details & Eligibility:\n${eligibility || 'Check official guidelines on the portal for detailed eligibility.'}\n\n` +
-    `📝 Brief Summary:\n${summary || 'Latest government recruitment and exam updates.'}\n\n` +
-    `🔗 Apply Online & Official Notification:\n${applyUrl || 'https://sarkariresultlive.site'}`;
-
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
   const quoraSpaceUrl = process.env.QUORA_SPACE_URL || 'https://www.quora.com';
 
+  if (!botToken || !chatId) {
+    return res.status(400).json({ 
+      error: 'TELEGRAM_BOT_TOKEN or TELEGRAM_ADMIN_CHAT_ID missing in .env' 
+    });
+  }
+
+  // Quora Copy-Paste Content
+  const quoraPostText = `📢 ${title}\n\n` +
+    `📌 Key Details & Eligibility:\n${eligibility || 'Check official guidelines for eligibility.'}\n\n` +
+    `📝 Brief Summary:\n${summary || 'Latest government recruitment update.'}\n\n` +
+    `🔗 Apply Online & Official Notification:\n${applyUrl || 'https://www.sarkariresultlive.site'}`;
+
+  // Telegram Display Message using HTML (No parse crashes)
+  const tgMessage = `🚀 <b>New Post Ready for Quora Space!</b>\n\n<pre>${quoraPostText}</pre>`;
+
   try {
     const tgPayload = {
       chat_id: chatId,
-      text: `🚀 *New Post Ready for Quora Space!*\n\n\`\`\`\n${quoraPostText}\n\`\`\``,
-      parse_mode: 'Markdown',
+      text: tgMessage,
+      parse_mode: 'HTML',
       reply_markup: {
         inline_keyboard: [
           [{ text: '🌐 Open Quora Space', url: quoraSpaceUrl }]
@@ -699,17 +708,18 @@ app.post('/api/send-quora-dispatch', requireApiKey, async (req, res) => {
       }
     };
 
-    await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, tgPayload);
+    const response = await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, tgPayload);
     console.log('✅ Quora dispatch card successfully sent to Admin Telegram!');
 
     return res.json({
       success: true,
-      message: 'Dispatch card sent to Admin Telegram',
+      messageId: response.data.result.message_id,
       formattedText: quoraPostText
     });
   } catch (err) {
-    console.error('❌ Telegram Dispatch Error:', err.response?.data || err.message);
-    return res.status(500).json({ error: 'Failed to send Telegram dispatch card', details: err.message });
+    const errorDetails = err.response?.data || err.message;
+    console.error('❌ Telegram Dispatch Error:', errorDetails);
+    return res.status(500).json({ error: 'Failed to send Telegram card', details: errorDetails });
   }
 });
 
