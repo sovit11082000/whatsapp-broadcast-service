@@ -60,6 +60,10 @@ const getRandomMusicFile = (musicFolderPath) => {
   return path.join(musicFolderPath, files[randomIndex]);
 };
 
+// 🔒 Simple lock so two heavy reel-generation jobs never run at the same time
+// (running two in parallel is what blows past 512MB on Render's free tier)
+let isReelJobRunning = false;
+
 // 🌐 QR Code Route
 app.get('/qr', async (req, res) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
@@ -67,11 +71,11 @@ app.get('/qr', async (req, res) => {
   res.set('Expires', '0');
 
   const qr = getLatestQr();
-  
+
   if (isWhatsAppReady()) {
     return res.send("<h3>✅ WhatsApp pehle se hi connected hai bhai!</h3>");
   }
-  
+
   if (!qr) {
     return res.send("<h3>⏳ QR Code load ho raha hai, thodi der me page refresh karo...</h3>");
   }
@@ -224,11 +228,18 @@ function getYouTubeCredentialsPool() {
 let activeYouTubeKeyIndex = 0;
 
 app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
+  // 🔒 Reject if another heavy job is already running (prevents RAM stacking)
+  if (isReelJobRunning) {
+    return res.status(409).json({ error: 'Another reel job is already running. Try again shortly.' });
+  }
+  isReelJobRunning = true;
+
   const timestamp = Date.now();
   const tempDir = os.tmpdir();
 
   const { imageUrl, caption, title, description, audioUrl, hashtags } = req.body;
   if (!imageUrl) {
+    isReelJobRunning = false;
     return res.status(400).json({ error: 'imageUrl is required' });
   }
 
@@ -245,7 +256,7 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
   const urlExt = path.extname(imageUrl.split('?')[0]) || '.png';
   const tempImgPath = path.join(tempDir, `input-${timestamp}${urlExt}`);
   const tempOutputPath = path.join(tempDir, `output-${timestamp}.mp4`);
-  
+
   let customAudioPath = null;
   let cloudinaryPublicId = null;
 
@@ -270,7 +281,7 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
 
     await new Promise((resolve, reject) => {
       let command = ffmpeg();
-      
+
       command.input(tempImgPath).inputOptions(['-loop 1']);
 
       if (hasLogo) command.input(logoPath).inputOptions(['-loop 1']);
@@ -326,8 +337,12 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
         .run();
     });
 
+    // NOTE: These three uploads now run ONE AFTER ANOTHER (not Promise.all)
+    // so only one video buffer/stream is in memory at a time. This is slower
+    // overall but avoids stacking 3x memory usage on the free 512MB instance.
+
     // 1. Instagram Reels Task
-    const igTask = (async () => {
+    async function runInstagramTask() {
       try {
         const cloudRes = await cloudinary.uploader.upload(tempOutputPath, {
           resource_type: 'video',
@@ -362,10 +377,10 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
         console.error('❌ [Instagram Reel Error Details]:', JSON.stringify(errMsg, null, 2));
         return { success: false, error: errMsg };
       }
-    })();
+    }
 
     // 2. YouTube Shorts Task
-    const ytTask = (async () => {
+    async function runYoutubeTask() {
       const parsedTags = hashtags ? hashtags.replace(/#/g, '').split(' ').filter(Boolean) : ['Shorts', 'GovtJobs'];
 
       if (!fs.existsSync(tempOutputPath)) {
@@ -409,13 +424,13 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
             },
             media: { body: fs.createReadStream(tempOutputPath) }
           });
-          
+
           console.log(`✅ [YouTube Shorts Success] Uploaded using Account #${targetIndex + 1}! Video ID: ${ytResponse.data.id}`);
           activeYouTubeKeyIndex = targetIndex;
           return { success: true, videoId: ytResponse.data.id, accountIndex: targetIndex + 1 };
         } catch (err) {
           lastError = err.response?.data || err.message;
-          const isQuota = 
+          const isQuota =
             err?.response?.data?.error?.errors?.some(e => e.reason === 'quotaExceeded') ||
             err?.response?.data?.error?.code === 403 ||
             err?.message?.includes('quota') ||
@@ -423,11 +438,7 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
 
           console.warn(`⚠️ [YouTube Warning] Account #${targetIndex + 1} Failed:`, lastError);
 
-          if (isQuota && pool.length > 1) {
-            console.log(`⏭️ Quota/Auth issue on Account #${targetIndex + 1}, switching to next key...`);
-            continue;
-          } else if (pool.length > 1) {
-            console.log(`⏭️ Retrying with next API account in pool...`);
+          if ((isQuota || true) && pool.length > 1) {
             continue;
           }
         }
@@ -435,10 +446,10 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
 
       console.error("❌ [YouTube Error Details]: All accounts in pool failed.", lastError);
       return { success: false, error: lastError };
-    })();
+    }
 
     // 3. Facebook Reel Task
-    const fbReelTask = (async () => {
+    async function runFacebookReelTask() {
       try {
         const systemUserToken = process.env.INSTAGRAM_ACCESS_TOKEN;
         if (!systemUserToken) return { success: false, error: 'INSTAGRAM_ACCESS_TOKEN missing in .env' };
@@ -453,9 +464,11 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
         }
 
         const targetPageId = process.env.FB_PAGE_ID || process.env.FACEBOOK_PAGE_ID;
-        const targetPage = targetPageId 
+        const targetPage = targetPageId
           ? pages.find(p => p.id === targetPageId) || pages[0]
           : pages[0];
+
+        console.log(`📌 Using Facebook Page: "${targetPage.name}" (ID: ${targetPage.id})`);
 
         const pageToken = targetPage.access_token;
         const pageId = targetPage.id;
@@ -472,15 +485,19 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
         const videoId = initRes.data.video_id;
         const uploadUrl = initRes.data.upload_url;
 
-        // Step B: Upload Video Buffer
-        const videoBuffer = fs.readFileSync(tempOutputPath);
-        await axios.post(uploadUrl, videoBuffer, {
+        // Step B: Upload Video via STREAM (not readFileSync) to avoid loading
+        // the whole video into a Buffer in RAM
+        const { size: videoSize } = fs.statSync(tempOutputPath);
+        const videoStream = fs.createReadStream(tempOutputPath);
+        await axios.post(uploadUrl, videoStream, {
           headers: {
             'Authorization': `OAuth ${pageToken}`,
             'offset': '0',
-            'file_size': videoBuffer.length.toString(),
+            'file_size': videoSize.toString(),
             'Content-Type': 'application/octet-stream'
-          }
+          },
+          maxBodyLength: Infinity,
+          maxContentLength: Infinity
         });
 
         // Step C: Publish Reel
@@ -503,10 +520,12 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
         console.error('❌ [Facebook Reel Error]:', errDetails);
         return { success: false, error: errDetails };
       }
-    })();
+    }
 
-    // Teeno platform ko parallelly run karo
-    const [igResult, ytResult, fbResult] = await Promise.all([igTask, ytTask, fbReelTask]);
+    // Sequentially run all three (one at a time) to keep peak memory low
+    const igResult = await runInstagramTask();
+    const ytResult = await runYoutubeTask();
+    const fbResult = await runFacebookReelTask();
 
     if (cloudinaryPublicId) {
       try { await cloudinary.uploader.destroy(cloudinaryPublicId, { resource_type: 'video' }); } catch (e) {}
@@ -524,6 +543,7 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
         try { fs.unlinkSync(filePath); } catch (e) {}
       }
     });
+    isReelJobRunning = false;
   }
 });
 
@@ -594,7 +614,7 @@ app.post('/api/send-linkedin', requireApiKey, async (req, res) => {
       return res.json({ success: true, postId });
     }
 
-    console.log("❌ LinkedIn Response:", response.status, data);
+    console.error("❌ LinkedIn Response:", response.status, data);
     res.status(response.status).send(data);
 
   } catch (err) {
@@ -627,11 +647,9 @@ app.post('/api/send-facebook', requireApiKey, async (req, res) => {
 
     // Configured Page ID match karo, ya pehla available page le lo
     const targetPageId = process.env.FB_PAGE_ID || process.env.FACEBOOK_PAGE_ID;
-    const targetPage = targetPageId 
+    const targetPage = targetPageId
       ? pages.find(p => p.id === targetPageId) || pages[0]
       : pages[0];
-
-    console.log(`📌 Using Facebook Page: "${targetPage.name}" (ID: ${targetPage.id})`);
 
     const pageAccessToken = targetPage.access_token;
     const activePageId = targetPage.id;
@@ -656,11 +674,11 @@ app.post('/api/send-facebook', requireApiKey, async (req, res) => {
 
     const postRes = await axios.post(fbEndpoint, payload);
     console.log('✅ Facebook Page post published successfully:', postRes.data.id || postRes.data.post_id);
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       pageName: targetPage.name,
       pageId: activePageId,
-      postId: postRes.data.id || postRes.data.post_id 
+      postId: postRes.data.id || postRes.data.post_id
     });
 
   } catch (err) {
@@ -669,6 +687,7 @@ app.post('/api/send-facebook', requireApiKey, async (req, res) => {
     res.status(500).json({ error: errorData });
   }
 });
+
 // --- Quora Formatter & Telegram Dispatch Route ---
 app.post('/api/send-quora-dispatch', requireApiKey, async (req, res) => {
   const { title, summary, eligibility, applyUrl } = req.body;
@@ -682,8 +701,8 @@ app.post('/api/send-quora-dispatch', requireApiKey, async (req, res) => {
   const quoraSpaceUrl = process.env.QUORA_SPACE_URL || 'https://www.quora.com';
 
   if (!botToken || !chatId) {
-    return res.status(400).json({ 
-      error: 'TELEGRAM_BOT_TOKEN or TELEGRAM_ADMIN_CHAT_ID missing in .env' 
+    return res.status(400).json({
+      error: 'TELEGRAM_BOT_TOKEN or TELEGRAM_ADMIN_CHAT_ID missing in .env'
     });
   }
 
