@@ -494,7 +494,8 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
             'Authorization': `OAuth ${pageToken}`,
             'offset': '0',
             'file_size': videoSize.toString(),
-            'Content-Type': 'application/octet-stream'
+            'Content-Type': 'application/octet-stream',
+            'Content-Length': videoSize.toString()
           },
           maxBodyLength: Infinity,
           maxContentLength: Infinity
