@@ -37,7 +37,7 @@ async function downloadFile(url, targetPath) {
     url,
     method: 'GET',
     responseType: 'stream',
-    timeout: 20000, // 20 seconds timeout limit
+    timeout: 20000,
     headers: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
@@ -61,7 +61,6 @@ const getRandomMusicFile = (musicFolderPath) => {
 };
 
 // 🔒 Simple lock so two heavy reel-generation jobs never run at the same time
-// (running two in parallel is what blows past 512MB on Render's free tier)
 let isReelJobRunning = false;
 
 // 🌐 QR Code Route
@@ -227,8 +226,8 @@ function getYouTubeCredentialsPool() {
 
 let activeYouTubeKeyIndex = 0;
 
+// --- Send All Reels (IG, YT, FB) ---
 app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
-  // 🔒 Reject if another heavy job is already running (prevents RAM stacking)
   if (isReelJobRunning) {
     return res.status(409).json({ error: 'Another reel job is already running. Try again shortly.' });
   }
@@ -237,7 +236,9 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
   const timestamp = Date.now();
   const tempDir = os.tmpdir();
 
-  const { imageUrl, caption, title, description, audioUrl, hashtags } = req.body;
+  const { imageUrl, caption, title, description, audioUrl, hashtags, applyUrl, postUrl } = req.body;
+  const targetLink = applyUrl || postUrl || 'https://www.sarkariresultlive.site';
+
   if (!imageUrl) {
     isReelJobRunning = false;
     return res.status(400).json({ error: 'imageUrl is required' });
@@ -250,8 +251,24 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
     .replace(/\|?\s*new update/gi, '')
     .replace(/\|?\s*new/gi, '')
     .trim();
+
   const finalYtTitle = `${rawTitle} #Shorts`.substring(0, 95);
-  const finalYtDescription = description || caption || 'Latest Govt Job Updates & Notification.';
+
+  // ✅ FIX 1: YouTube description mein admin panel ka description prioritize karo
+  const finalYtDescription = description || (
+    `📢 ${rawTitle}\n\n` +
+    `🔗 Direct Apply / Download Link:\n${targetLink}\n\n` +
+    `📌 Check Details & Notification: https://www.sarkariresultlive.site\n\n` +
+    `${hashtags || '#Shorts #SarkariResult #GovtJobs'}`
+  );
+
+  // ✅ FIX 2: Instagram/FB caption mein admin panel ka dynamic caption prioritize karo
+  const finalSocialCaption = caption || (
+    `🚨 ${rawTitle}\n\n` +
+    `🔗 Direct Link: ${targetLink}\n` +
+    `👆 Link bio mein bhi available hai!\n\n` +
+    `${hashtags || '#sarkariresult #govtjobs #update'}`
+  );
 
   const urlExt = path.extname(imageUrl.split('?')[0]) || '.png';
   const tempImgPath = path.join(tempDir, `input-${timestamp}${urlExt}`);
@@ -288,7 +305,6 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
       if (hasAnim) command.input(animVideoPath).inputOptions(['-stream_loop -1']);
       if (selectedAudioPath) command.input(selectedAudioPath);
 
-      // Low-RAM Filter Complex (Scaling blur down to saving RAM)
       let filterComplex = [
         "[0:v]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,avgblur=sizeX=8:sizeY=8,scale=720:1280[bg]",
         "[0:v]scale=713:-1:force_original_aspect_ratio=decrease[scaled_job_img]",
@@ -321,7 +337,6 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
         command.outputOptions(['-map', lastVideoNode]);
       }
 
-      // Memory Control Options (-threads 1 & low buffer)
       command
         .outputOptions([
           '-c:v', 'libx264',
@@ -336,10 +351,6 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
         .on('error', reject)
         .run();
     });
-
-    // NOTE: These three uploads now run ONE AFTER ANOTHER (not Promise.all)
-    // so only one video buffer/stream is in memory at a time. This is slower
-    // overall but avoids stacking 3x memory usage on the free 512MB instance.
 
     // 1. Instagram Reels Task
     async function runInstagramTask() {
@@ -356,7 +367,7 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
         const containerRes = await axios.post(`https://graph.facebook.com/v21.0/${igAccountId}/media`, {
           media_type: 'REELS',
           video_url: cloudRes.secure_url,
-          caption: caption || title || 'Govt Exam Study Updates 🚀',
+          caption: finalSocialCaption, // ✅ Dynamic caption with admin panel hashtags & link
           access_token: accessToken
         });
 
@@ -381,7 +392,9 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
 
     // 2. YouTube Shorts Task
     async function runYoutubeTask() {
-      const parsedTags = hashtags ? hashtags.replace(/#/g, '').split(' ').filter(Boolean) : ['Shorts', 'GovtJobs'];
+      const parsedTags = hashtags 
+        ? hashtags.replace(/#/g, '').split(/\s+/).filter(Boolean) 
+        : ['Shorts', 'GovtJobs', 'SarkariResult'];
 
       if (!fs.existsSync(tempOutputPath)) {
         return { success: false, error: "Rendered output file path par nahi mili!" };
@@ -416,7 +429,7 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
             requestBody: {
               snippet: {
                 title: finalYtTitle,
-                description: finalYtDescription,
+                description: finalYtDescription, // ✅ Dynamic YouTube description with post URL & tags
                 tags: parsedTags,
                 categoryId: '27'
               },
@@ -454,7 +467,6 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
         const systemUserToken = process.env.INSTAGRAM_ACCESS_TOKEN;
         if (!systemUserToken) return { success: false, error: 'INSTAGRAM_ACCESS_TOKEN missing in .env' };
 
-        // Page token aur ID dynamically fetch karo
         const accountsRes = await axios.get(
           `https://graph.facebook.com/v22.0/me/accounts?access_token=${systemUserToken}`
         );
@@ -473,7 +485,6 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
         const pageToken = targetPage.access_token;
         const pageId = targetPage.id;
 
-        // Step A: Initialize Reel Upload
         const initRes = await axios.post(
           `https://graph.facebook.com/v22.0/${pageId}/video_reels`,
           {
@@ -485,8 +496,6 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
         const videoId = initRes.data.video_id;
         const uploadUrl = initRes.data.upload_url;
 
-        // Step B: Upload Video via STREAM (not readFileSync) to avoid loading
-        // the whole video into a Buffer in RAM
         const { size: videoSize } = fs.statSync(tempOutputPath);
         const videoStream = fs.createReadStream(tempOutputPath);
         await axios.post(uploadUrl, videoStream, {
@@ -501,7 +510,6 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
           maxContentLength: Infinity
         });
 
-        // Step C: Publish Reel
         await axios.post(
           `https://graph.facebook.com/v22.0/${pageId}/video_reels`,
           {
@@ -509,7 +517,7 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
             access_token: pageToken,
             video_id: videoId,
             video_state: 'PUBLISHED',
-            description: caption || title || 'Govt Exam Study Updates 🚀'
+            description: finalSocialCaption // ✅ Facebook Reel ke description mein dynamic caption & tags
           }
         );
 
@@ -523,7 +531,6 @@ app.post('/api/send-all-reels', requireApiKey, async (req, res) => {
       }
     }
 
-    // Sequentially run all three (one at a time) to keep peak memory low
     const igResult = await runInstagramTask();
     const ytResult = await runYoutubeTask();
     const fbResult = await runFacebookReelTask();
@@ -634,7 +641,6 @@ app.post('/api/send-facebook', requireApiKey, async (req, res) => {
   }
 
   try {
-    // 1. System User se linked Pages aur unke Access Tokens fetch karo
     const accountsRes = await axios.get(
       `https://graph.facebook.com/v22.0/me/accounts?access_token=${systemUserToken}`
     );
@@ -646,7 +652,6 @@ app.post('/api/send-facebook', requireApiKey, async (req, res) => {
       });
     }
 
-    // Configured Page ID match karo, ya pehla available page le lo
     const targetPageId = process.env.FB_PAGE_ID || process.env.FACEBOOK_PAGE_ID;
     const targetPage = targetPageId
       ? pages.find(p => p.id === targetPageId) || pages[0]
@@ -655,7 +660,6 @@ app.post('/api/send-facebook', requireApiKey, async (req, res) => {
     const pageAccessToken = targetPage.access_token;
     const activePageId = targetPage.id;
 
-    // 2. Page par post publish karo
     let fbEndpoint = `https://graph.facebook.com/v22.0/${activePageId}/feed`;
     let payload = {
       message: message || "Govt Exam Study Updates 🚀",
@@ -707,13 +711,11 @@ app.post('/api/send-quora-dispatch', requireApiKey, async (req, res) => {
     });
   }
 
-  // Quora Copy-Paste Content
   const quoraPostText = `📢 ${title}\n\n` +
     `📌 Key Details & Eligibility:\n${eligibility || 'Check official guidelines for eligibility.'}\n\n` +
     `📝 Brief Summary:\n${summary || 'Latest government recruitment update.'}\n\n` +
     `🔗 Apply Online & Official Notification:\n${applyUrl || 'https://www.sarkariresultlive.site'}`;
 
-  // Telegram Display Message using HTML (No parse crashes)
   const tgMessage = `🚀 <b>New Post Ready for Quora Space!</b>\n\n<pre>${quoraPostText}</pre>`;
 
   try {
